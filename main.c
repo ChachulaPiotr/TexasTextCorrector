@@ -5,19 +5,9 @@
 #include <msp430f1611.h>
 #include <stdint.h>
 
-#define PROGRAM_RESET_VECTOR_ADDRESS 0x20FE
-
-int iterator = 0;
-int stopping = 0;
 int state = 0;
 char TEXT[100];
-char* START = "\n\rSTART\n";
 char koniec = '\r';
-uint16_t value_DMASZ;
-
-void runprogram();
-void runReceivedProgram();
-
 
 int main( void )
 {
@@ -43,17 +33,17 @@ int main( void )
 	U0CTL &= ~SWRST; // Wylaczenie software reset
 
 	IE1 |= UTXIE0;
-	// DMA0 transmiting
-	DMACTL0 |= DMA0TSEL_4; // transmit trigger transmit
-	DMA0CTL |= DMASRCINCR_3 + DMASRCBYTE + DMADSTBYTE + DMALEVEL + DMAIE; // increment source, byte in, byte out, level triggered
-
 	// DMA1 recv
 	DMACTL0 |= DMA1TSEL_3; // recv trigger recv
 	DMA1CTL |= DMADSTINCR_3 + DMASRCBYTE + DMADSTBYTE + DMALEVEL + DMAIE; // increment source, byte in, byte out, level triggered
 
 	TA0CCTL0 |= CAP | CM_0;
 	TA0CTL |= TASSEL_1 | ID_3 | TAIE;
-	TA0CCR0 = 5000;
+	TA0CCR0 = 500;
+
+	TB0CCTL0 |= CAP | CM_0;
+	TB0CTL |= TASSEL_1 | ID_3 | TAIE;
+	TB0CCR0 = 20000;
 
 
 //UART koniec---------------------------------------------------------------------
@@ -62,10 +52,6 @@ int main( void )
 	P3DIR = BIT4;
 	_EINT();
  	DMA1SA = (unsigned int)&U0RXBUF; // Source block address
-	//DMA1DA = 0x1100; // Dest single address
-	//DMA1SZ = 1; // Block size
-	//DMA1CTL |= DMAEN;
-	//drukuj (START);
 	while(true)
 	{
 		if(state == 0){
@@ -77,23 +63,27 @@ int main( void )
 		if (state == 2){
 			fixtext();
 		}
-		//__bis_SR_register(LPM1_bits | GIE);
 	}
 }
 
 
 inline void checkiffilesent(){
 	int i =0;
+	DMA1CTL &= ~DMAEN;
+	_DINT();
 	while (i<50){
 		if (TEXT[i] == koniec){
 			state = 2;
-			TACTL |= MC_0 | TACLR;
-			DMA1CTL &= ~DMAEN;
+			TACTL &= ~MC_1;
+			TACTL |= TACLR;
+			TBCTL &= ~MC_1;
+			TBCTL |= TBCLR;
 			break;
 		}
 		i++;
 	}
-	if (state != 2) __bis_SR_register(LPM1_bits | GIE);
+	_EINT();
+	if (state != 2)  __bis_SR_register(LPM1_bits | GIE);
 }
 
 inline void fixtext(){
@@ -127,30 +117,13 @@ inline void fixtext(){
 }
 
 inline void getready4file(){
-	//DMA1SZ = value_DMASZ;
 	DMA1SZ = 50;
 	DMA1CTL |= DMAEN;
-	DMA1DA = TEXT;
-	TACTL |= MC_1;
+	DMA1DA = TEXT+1;
+	IE1 |= URXIE0;
 	__bis_SR_register(LPM1_bits | GIE);
 }
 
-
-inline void drukuj (char * napis){
-	iterator = 0;
-	while (1){
-		if (napis[iterator]=='\0'){
-			iterator = 0;
-			break;
-		}
-		else{
-			stopping = 1;
-			U0TXBUF = napis[iterator];
-			while (stopping){}
-
-		}
-	}
-}
 
 
 #pragma vector = USART0TX_VECTOR // TRANSMITER
@@ -161,25 +134,45 @@ __interrupt void usart0_tx (void)
 #pragma vector = USART0RX_VECTOR // TRANSMITER
 __interrupt void usart0_rx (void)
 {
+	TEXT[0] = U0RXBUF;
 	TACTL |= MC_1;
+	TBCTL |= MC_1;
 	IE1 &= ~URXIE0;
 }
 
 #pragma vector=DACDMA_VECTOR
 __interrupt void dmaisr(void)
 {
-	state = 2;
-	TACTL |= MC_0 | TACLR;
+	state = 1;
+	TACTL &= ~MC_1;
+	TACTL |= TACLR;
+	TBCTL &= ~MC_1;
+	TBCTL |= TBCLR;
 	DMA1CTL &= ~DMAIFG;
 	_BIC_SR_IRQ(LPM1_bits);
 }
 
 #pragma vector=TIMER0_A1_VECTOR
-__interrupt void ISR_timer (void)
+__interrupt void ISR_timerA (void)
 {
 
 	state = 1;
 	TACTL &= ~(TAIFG);
     _BIC_SR_IRQ(LPM1_bits);
 }
+#pragma vector=TIMER0_B1_VECTOR
+__interrupt void ISR_timerB (void)
+{
+
+	state = 0;
+	TBCTL &= ~(TBIFG);
+	TACTL &= ~MC_1;
+	TACTL |= TACLR;
+	TBCTL &= ~MC_1;
+	TBCTL |= TBCLR;
+	U0TXBUF = 'x';
+    _BIC_SR_IRQ(LPM1_bits);
+}
+
+
 
